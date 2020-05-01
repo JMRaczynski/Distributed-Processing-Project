@@ -1,2 +1,2 @@
 mpicc util.c main.c -o main -Wall -lm
-mpirun -np 2 main $1 $2 $3 $4
+mpirun -np $1 main $2 $3 $4 $5

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <unistd.h>
 #include <mpi.h>
 
 #define GOOD_GUY 0
@@ -15,7 +16,7 @@
 
 int areArgumentsCorrect(const int g, const int b, const int o, const int t, const int size) {
     if (b + g != size) return 0;
-    if (t < 0 || g < 0 || o < 0 || b < 0) return 0;
+    if (t < 0 || g <= 0 || o < 0 || b <= 0) return 0;
     if (o + t < 1) return 0;
     return 1;
 }
@@ -77,6 +78,75 @@ void broadcastMessage(const int senderId, const int resourceId, const int tag, c
     }
 }
 
+int updateLamportClock(const int myLamportClock, const int incomingLamportClock) {
+    int biggerClock = myLamportClock >= incomingLamportClock ? myLamportClock : incomingLamportClock;
+    return biggerClock + 1;
+}
+
+void sendAcceptMessage(const int recipientId, const int clockValue) {
+    int messageData[2] = {0};
+    messageData[0] = clockValue;
+    MPI_Send(messageData, 2, MPI_INT, recipientId, ACK, MPI_COMM_WORLD);
+}
+
+char checkIfAcceptedByEveryone(const char* ackList, const int numberOfProcesses) {
+    for (int i = 0; i < numberOfProcesses; i++) {
+        if (ackList[i] == 0) return 0;
+    }
+    return 1;
+}
+
+void enterCriticalSection(const int processId, const int resourceId) {
+    //printf("\033[1;31m");
+    printf("\tProces o id %d manipuluje zasob o id %d\n", processId, resourceId);
+    usleep(rand() % 600000 + 10000);
+    printf("\033[1;32m");
+    printf("\tProces o id %d skonczyl manipulowac z zasobem o id %d\n", processId, resourceId);
+    printf("\033[0m");
+}
+
+char checkIfRequestIsOnTopOfQueue(struct heap** requestQueues, const int resourceId, const int processId, const int processType) {
+    //printf("%d %d wtf %d\n", processType, resourceId, processId);
+    //printHeap(&requestQueues[processType][resourceId]);
+    return requestQueues[processType][resourceId].array[1].processId == processId;
+}
+
+int removePendingReleases(int resourceId, char* resourcesStates, struct list** releaseQueues, struct heap** requestQueues) {
+    struct request request;
+    int desiredProcessType;
+    int targetResourceState;
+    int releaseIndex;
+    int result;
+    while (1) {
+        if (resourcesStates[resourceId] == BROKEN) {
+            desiredProcessType = GOOD_GUY;
+            targetResourceState = REPAIRED;
+        }
+        else {
+            desiredProcessType = BAD_GUY;
+            targetResourceState = BROKEN;
+        }
+        if (requestQueues[desiredProcessType][resourceId].size != 0) {
+            int firstProcessId = requestQueues[desiredProcessType][resourceId].array[1].processId;
+            releaseIndex = getIndexOf(&releaseQueues[desiredProcessType][resourceId], firstProcessId, resourceId);
+            if (releaseIndex != -1) {
+                removeByIndex(&releaseQueues[desiredProcessType][resourceId], releaseIndex);
+                resourcesStates[resourceId] = targetResourceState;
+                request = removeRoot(&requestQueues[desiredProcessType][resourceId]);
+            }
+            else {
+                result = firstProcessId;
+                break;
+            }
+        }
+        else {
+            result = -1;
+            break;
+        }
+    }
+    return result;
+}
+
 int main(int argc, char **argv) {
 
     MPI_Init(&argc, &argv); // inicjalizacja MPI
@@ -101,6 +171,8 @@ int main(int argc, char **argv) {
 
     int lamportClock = 0;
     char nieWiemJakNazwacTeZmienna = 1;
+    char isOnTopOfQueue, isAcceptedByEveryone;
+    char awaitingCriticalSection;
     int receivedMessageBuffer[2];
     srand(time(0) + rank);
 
@@ -128,6 +200,8 @@ int main(int argc, char **argv) {
 
     while(1) {
         for (int i = 0; i < size; i++) ackList[i] = 0;
+        ackList[rank] = 1;
+        isOnTopOfQueue = isAcceptedByEveryone = 0;
         int chosenResource;
         if (nieWiemJakNazwacTeZmienna) {
             nieWiemJakNazwacTeZmienna = 0;
@@ -135,63 +209,67 @@ int main(int argc, char **argv) {
         }
         else {
             chosenResource = chooseResource(requestQueues, NUMBER_OF_RESOURCES, PROCESS_TYPE, OPPOSITE_TYPE);
-                    printf("ZASOB: %d\n", chosenResource);
-
         }
+        //printf("Proces %d ubiega sie o zasob %d\n", rank, chosenResource);
         lamportClock = incrementLamportClock(lamportClock);
+        awaitingCriticalSection = 1;
         insertRequest(&requestQueues[PROCESS_TYPE][chosenResource], lamportClock, rank);
         broadcastMessage(rank, chosenResource, REQ, size, lamportClock);
-
-        MPI_Recv(receivedMessageBuffer, 2, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-        printf("Proces %d odebrał żądanie procesu %d. Proces %d prosi o zasob nr %d z zegarem %d\n",
-                    rank, status.MPI_SOURCE, status.MPI_SOURCE, receivedMessageBuffer[1], receivedMessageBuffer[0]);
-        
+        while(awaitingCriticalSection) {
+            MPI_Recv(receivedMessageBuffer, 2, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+            printf("Proces %d otrzymal wiadomosc typu %d od procesu %d\n", rank, status.MPI_TAG, status.MPI_SOURCE);
+            int incomingClockValue = receivedMessageBuffer[0];
+            int requestedResourceId;
+            int releasedResourceId;
+            int senderType;
+            lamportClock = updateLamportClock(lamportClock, incomingClockValue);
+            switch (status.MPI_TAG) {
+            case REQ:
+                requestedResourceId = receivedMessageBuffer[1];
+                senderType = status.MPI_SOURCE < NUMBER_OF_GOOD_GUYS ? GOOD_GUY : BAD_GUY;
+                insertRequest(&requestQueues[senderType][requestedResourceId], incomingClockValue, status.MPI_SOURCE);
+                sendAcceptMessage(status.MPI_SOURCE, lamportClock);
+                lamportClock = incrementLamportClock(lamportClock);
+                break;
+            case ACK:
+                ackList[status.MPI_SOURCE] = 1;
+                isAcceptedByEveryone = checkIfAcceptedByEveryone(ackList, size);
+                isOnTopOfQueue = checkIfRequestIsOnTopOfQueue(requestQueues, chosenResource, rank, PROCESS_TYPE);
+                //printf("ID procesu: %d Czy na szczycie :%d Czy zaakceptowany: %d Stan procesu: %d\n", rank, isOnTopOfQueue, isAcceptedByEveryone, resourcesStates[chosenResource]);
+                if (isAcceptedByEveryone && isOnTopOfQueue && resourcesStates[chosenResource] == PROCESS_TYPE) {
+                    enterCriticalSection(rank, chosenResource);
+                    awaitingCriticalSection = 0;
+                    lamportClock = incrementLamportClock(lamportClock);
+                    broadcastMessage(rank, chosenResource, RELEASE, size, lamportClock);
+                    removeRoot(&requestQueues[PROCESS_TYPE][chosenResource]);
+                    resourcesStates[chosenResource] = PROCESS_TYPE == GOOD_GUY ? REPAIRED : BROKEN;
+                }
+                break;
+            case RELEASE:
+                releasedResourceId = receivedMessageBuffer[1];
+                senderType = status.MPI_SOURCE < NUMBER_OF_GOOD_GUYS ? GOOD_GUY : BAD_GUY;
+                if (resourcesStates[releasedResourceId] == senderType
+                        && checkIfRequestIsOnTopOfQueue(requestQueues, releasedResourceId, status.MPI_SOURCE, senderType)) {
+                    removeRoot(&requestQueues[senderType][releasedResourceId]);
+                    resourcesStates[releasedResourceId] = senderType == GOOD_GUY ? REPAIRED : BROKEN; 
+                    int nextProcessId = removePendingReleases(releasedResourceId, resourcesStates, releaseQueues, requestQueues);
+                    if (chosenResource == releasedResourceId && nextProcessId == rank && isAcceptedByEveryone) {
+                        enterCriticalSection(rank, chosenResource);
+                        awaitingCriticalSection = 0;
+                        lamportClock = incrementLamportClock(lamportClock);
+                        broadcastMessage(rank, chosenResource, RELEASE, size, lamportClock);
+                        removeRoot(&requestQueues[PROCESS_TYPE][chosenResource]);
+                        resourcesStates[chosenResource] = PROCESS_TYPE == GOOD_GUY ? REPAIRED : BROKEN;
+                    }
+                }
+                else {
+                    struct listItem newPendingRelease;
+                    newPendingRelease.processId = status.MPI_SOURCE;
+                    newPendingRelease.resourceId = releasedResourceId;
+                    insert(&releaseQueues[senderType][releasedResourceId], newPendingRelease);
+                }
+                break;
+            }
+        }
     }
-    
-
-
-    /*if (rank == 0) {
-        insertRequest(&requestQueues[1][1], 1, 4);
-        insertRequest(&requestQueues[1][1], 8, 4);
-        insertRequest(&requestQueues[1][1], 4, 4);
-        insertRequest(&requestQueues[1][1], 3, 4);
-        removeRoot(&requestQueues[1][1]);
-        insertRequest(&requestQueues[1][1], 9, 4);
-        insertRequest(&requestQueues[1][1], 6, 4);
-        insertRequest(&requestQueues[1][1], 2, 4);
-        insertRequest(&requestQueues[1][1], 3, 2);
-        removeRoot(&requestQueues[1][1]);
-        insertRequest(&requestQueues[1][1], 5, 4);
-        insertRequest(&requestQueues[1][1], 7, 4);
-        insertRequest(&requestQueues[1][1], 1, 2);
-        removeRoot(&requestQueues[1][1]);
-
-        printHeap(&requestQueues[1][1]);
-
-        struct listItem m;
-        m.processId = 1;
-        m.resourceId = 1;
-        insert(&releaseQueues[1][1], m);
-        printList(&releaseQueues[1][1]);
-        m.processId = 99;
-        m.resourceId = 356;
-        insert(&releaseQueues[1][1], m);
-        m.processId = -1124;
-        m.resourceId = 35;
-        insert(&releaseQueues[1][1], m);
-        m.processId = -11;
-        m.resourceId = 33;
-        insert(&releaseQueues[1][1], m);
-        removeByObject(&releaseQueues[1][1], -1124, 35);
-        printList(&releaseQueues[1][1]);
-        m.resourceId = 39;
-        m.processId = -132;
-        insert(&releaseQueues[1][1], m);
-        removeByObject(&releaseQueues[1][1], -132, 39);
-        m.resourceId = 3413;
-        m.processId = 112;
-        insert(&releaseQueues[1][1], m);
-        printList(&releaseQueues[1][1]);
-    }*/
-    MPI_Finalize();
 }

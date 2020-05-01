@@ -45,19 +45,26 @@ void topDownRebuild(struct heap *heap, const int parentIndex) {
     int leftChildIndex = parentIndex * 2;
     int rightChildIndex = leftChildIndex + 1;
     if (heap->size >= rightChildIndex) { // wierzchołek ma dwoje dzieci
-        if (heap->array[parentIndex].clockValue <= heap->array[leftChildIndex].clockValue
-        && heap->array[parentIndex].clockValue <= heap->array[rightChildIndex].clockValue) return;
+        if (heap->array[parentIndex].clockValue < heap->array[leftChildIndex].clockValue
+        && heap->array[parentIndex].clockValue < heap->array[rightChildIndex].clockValue) return;
         if (heap->array[leftChildIndex].clockValue <= heap->array[rightChildIndex].clockValue) {
-            swap(&heap->array[leftChildIndex], &heap->array[parentIndex]);
-            topDownRebuild(heap, leftChildIndex);
+            if (heap->array[leftChildIndex].clockValue < heap->array[parentIndex].clockValue
+                    || heap->array[leftChildIndex].processId < heap->array[parentIndex].processId) {
+                swap(&heap->array[leftChildIndex], &heap->array[parentIndex]);
+                topDownRebuild(heap, leftChildIndex);
+            }
         }
         else {
-            swap(&heap->array[rightChildIndex], &heap->array[parentIndex]);
-            topDownRebuild(heap, rightChildIndex);
+            if (heap->array[rightChildIndex].clockValue < heap->array[parentIndex].clockValue
+                    || heap->array[rightChildIndex].processId < heap->array[parentIndex].processId) {
+                swap(&heap->array[rightChildIndex], &heap->array[parentIndex]);
+                topDownRebuild(heap, rightChildIndex);
+            }
         }
     }
     if (heap->size == leftChildIndex) { // wierzchołek ma tylko jedno dziecko
-        if (heap->array[leftChildIndex].clockValue < heap->array[parentIndex].clockValue) {
+        if (heap->array[leftChildIndex].clockValue < heap->array[parentIndex].clockValue
+            || heap->array[leftChildIndex].processId < heap->array[parentIndex].processId) {
             swap(&heap->array[leftChildIndex], &heap->array[parentIndex]);
         }
     }
@@ -67,7 +74,9 @@ void topDownRebuild(struct heap *heap, const int parentIndex) {
 void bottomUpRebuild(struct heap *heap, const int nodeIndex) {
     int parentIndex = nodeIndex / 2;
     if (parentIndex > 0) {
-        if (heap->array[parentIndex].clockValue > heap->array[nodeIndex].clockValue) {
+        if (heap->array[parentIndex].clockValue > heap->array[nodeIndex].clockValue
+                || (heap->array[parentIndex].processId > heap->array[nodeIndex].processId
+                && heap->array[parentIndex].clockValue == heap->array[nodeIndex].clockValue)) {
             swap(&heap->array[nodeIndex], &heap->array[parentIndex]);
             bottomUpRebuild(heap, parentIndex);
         }
@@ -97,7 +106,7 @@ void printHeap(const struct heap *heap) {
     double heapHeight = log(heap->size) / log(2) + 1;
     for (int i = 1; i <= heapHeight; i++) {
         for (double j = pow(2, i - 1); j < pow(2, i); j++) {
-            printf("%d ", heap->array[(int) j].clockValue);
+            printf("%d %d\t", heap->array[(int) j].clockValue, heap->array[(int) j].processId);
             if (j == heap->size) break;
         }
         printf("\n");
