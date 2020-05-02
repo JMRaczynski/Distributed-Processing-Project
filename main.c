@@ -96,12 +96,13 @@ char checkIfAcceptedByEveryone(const char* ackList, const int numberOfProcesses)
     return 1;
 }
 
-void enterCriticalSection(const int processId, const int resourceId) {
-    //printf("\033[1;31m");
-    printf("\tProces o id %d manipuluje zasob o id %d\n", processId, resourceId);
+void enterCriticalSection(const int processId, const char* processType, const int resourceId) {
+    printf("\033[1;31m");
+    printf("\t%s o id %d manipuluje zasob o id %d\n", processType, processId, resourceId);
+    printf("\033[0m");
     usleep(rand() % 600000 + 10000);
     printf("\033[1;32m");
-    printf("\tProces o id %d skonczyl manipulowac z zasobem o id %d\n", processId, resourceId);
+    printf("\t%s o id %d skonczyl manipulowac z zasobem o id %d\n", processType, processId, resourceId);
     printf("\033[0m");
 }
 
@@ -163,6 +164,7 @@ int main(int argc, char **argv) {
     const int NUMBER_OF_RESOURCES = NUMBER_OF_TOILETS + NUMBER_OF_PLANTS;
     const int PROCESS_TYPE = rank < NUMBER_OF_GOOD_GUYS ? GOOD_GUY : BAD_GUY;
     const int OPPOSITE_TYPE = rank < NUMBER_OF_GOOD_GUYS ? BAD_GUY : GOOD_GUY;
+    const char* PROCESS_TYPE_STRING = PROCESS_TYPE == GOOD_GUY ? "Dobrodziej" : "Zlodziej";
     
     if (!areArgumentsCorrect(NUMBER_OF_GOOD_GUYS, NUMBER_OF_BAD_GUYS, // sprawdzenie poprawności argumentów
                             NUMBER_OF_PLANTS, NUMBER_OF_TOILETS, size)) {
@@ -217,7 +219,8 @@ int main(int argc, char **argv) {
         broadcastMessage(rank, chosenResource, REQ, size, lamportClock);
         while(awaitingCriticalSection) {
             MPI_Recv(receivedMessageBuffer, 2, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-            printf("Proces %d otrzymal wiadomosc typu %d od procesu %d\n", rank, status.MPI_TAG, status.MPI_SOURCE);
+            if (status.MPI_TAG == 3) printf("%s %d otrzymal wiadomosc release dotyczaca zasobu %d od procesu %d\n", PROCESS_TYPE_STRING, rank, receivedMessageBuffer[1], status.MPI_SOURCE);
+            //printf("Proces %d otrzymal wiadomosc typu %d od procesu %d\n", rank, status.MPI_TAG, status.MPI_SOURCE);
             int incomingClockValue = receivedMessageBuffer[0];
             int requestedResourceId;
             int releasedResourceId;
@@ -237,7 +240,7 @@ int main(int argc, char **argv) {
                 isOnTopOfQueue = checkIfRequestIsOnTopOfQueue(requestQueues, chosenResource, rank, PROCESS_TYPE);
                 //printf("ID procesu: %d Czy na szczycie :%d Czy zaakceptowany: %d Stan procesu: %d\n", rank, isOnTopOfQueue, isAcceptedByEveryone, resourcesStates[chosenResource]);
                 if (isAcceptedByEveryone && isOnTopOfQueue && resourcesStates[chosenResource] == PROCESS_TYPE) {
-                    enterCriticalSection(rank, chosenResource);
+                    enterCriticalSection(rank, PROCESS_TYPE_STRING, chosenResource);
                     awaitingCriticalSection = 0;
                     lamportClock = incrementLamportClock(lamportClock);
                     broadcastMessage(rank, chosenResource, RELEASE, size, lamportClock);
@@ -254,7 +257,7 @@ int main(int argc, char **argv) {
                     resourcesStates[releasedResourceId] = senderType == GOOD_GUY ? REPAIRED : BROKEN; 
                     int nextProcessId = removePendingReleases(releasedResourceId, resourcesStates, releaseQueues, requestQueues);
                     if (chosenResource == releasedResourceId && nextProcessId == rank && isAcceptedByEveryone) {
-                        enterCriticalSection(rank, chosenResource);
+                        enterCriticalSection(rank, PROCESS_TYPE_STRING, chosenResource);
                         awaitingCriticalSection = 0;
                         lamportClock = incrementLamportClock(lamportClock);
                         broadcastMessage(rank, chosenResource, RELEASE, size, lamportClock);
