@@ -212,7 +212,8 @@ int main(int argc, char **argv) {
         else {
             chosenResource = chooseResource(requestQueues, NUMBER_OF_RESOURCES, PROCESS_TYPE, OPPOSITE_TYPE);
         }
-        //printf("Proces %d ubiega sie o zasob %d\n", rank, chosenResource);
+        if (rank == 11) printHeap(&requestQueues[GOOD_GUY][chosenResource]);
+        //printf("%s %d ubiega sie o zasob %d\n", PROCESS_TYPE_STRING, rank, chosenResource);
         lamportClock = incrementLamportClock(lamportClock);
         awaitingCriticalSection = 1;
         insertRequest(&requestQueues[PROCESS_TYPE][chosenResource], lamportClock, rank);

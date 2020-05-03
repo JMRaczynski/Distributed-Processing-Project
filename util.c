@@ -47,7 +47,9 @@ void topDownRebuild(struct heap *heap, const int parentIndex) {
     if (heap->size >= rightChildIndex) { // wierzchołek ma dwoje dzieci
         if (heap->array[parentIndex].clockValue < heap->array[leftChildIndex].clockValue
         && heap->array[parentIndex].clockValue < heap->array[rightChildIndex].clockValue) return;
-        if (heap->array[leftChildIndex].clockValue <= heap->array[rightChildIndex].clockValue) {
+        if (heap->array[leftChildIndex].clockValue < heap->array[rightChildIndex].clockValue ||
+                (heap->array[leftChildIndex].clockValue == heap->array[rightChildIndex].clockValue &&
+                heap->array[leftChildIndex].processId < heap->array[rightChildIndex].processId)) {
             if (heap->array[leftChildIndex].clockValue < heap->array[parentIndex].clockValue
                     || heap->array[leftChildIndex].processId < heap->array[parentIndex].processId) {
                 swap(&heap->array[leftChildIndex], &heap->array[parentIndex]);
@@ -64,7 +66,8 @@ void topDownRebuild(struct heap *heap, const int parentIndex) {
     }
     if (heap->size == leftChildIndex) { // wierzchołek ma tylko jedno dziecko
         if (heap->array[leftChildIndex].clockValue < heap->array[parentIndex].clockValue
-            || heap->array[leftChildIndex].processId < heap->array[parentIndex].processId) {
+                || (heap->array[leftChildIndex].processId < heap->array[parentIndex].processId
+                && heap->array[leftChildIndex].clockValue == heap->array[parentIndex].clockValue)) {
             swap(&heap->array[leftChildIndex], &heap->array[parentIndex]);
         }
     }
@@ -85,7 +88,9 @@ void bottomUpRebuild(struct heap *heap, const int nodeIndex) {
 
 struct request removeRoot(struct heap *heap) {
     struct request result = heap->array[1];
-    heap->array[1] = heap->array[heap->size--];
+    heap->array[1].clockValue = heap->array[heap->size].clockValue;
+    heap->array[1].processId = heap->array[heap->size].processId;
+    heap->size--;
     topDownRebuild(heap, 1);
     return result;
 }
