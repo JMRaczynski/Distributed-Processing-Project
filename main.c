@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
+#include <string.h>
 #include <mpi.h>
 
 #define GOOD_GUY 0
@@ -22,7 +23,7 @@ int areArgumentsCorrect(const int g, const int b, const int o, const int t, cons
 }
 
 void finish(const char message[], const int rank) {
-    if (rank == 0) printf(message);
+    if (rank == 0) printf("%s", message);
     MPI_Finalize();
     exit(0);
 }
@@ -38,6 +39,7 @@ int chooseResourceFirstTime(const char *resourcesStates, const int numberOfResou
             insert(&availableResources, resource);
         }
     }
+    if (availableResources.size == 0) return 0;
     return availableResources.array[rand() % availableResources.size].resourceId;
 }
 
@@ -96,13 +98,14 @@ char checkIfAcceptedByEveryone(const char* ackList, const int numberOfProcesses)
     return 1;
 }
 
-void enterCriticalSection(const int processId, const char* processType, const int resourceId) {
+void enterCriticalSection(const int processId, char* processType, const int resourceId, int *lamportClock, char* chosenResourceTypeString, char* action) {
     printf("\033[1;31m");
-    printf("\t%s o id %d manipuluje zasob o id %d\n", processType, processId, resourceId);
+    printf("\tZegar Lamporta - %d - %s o id %d %s %s o id %d\n", *lamportClock, processType, processId, action, chosenResourceTypeString, resourceId);
     printf("\033[0m");
     usleep(rand() % 600000 + 10000);
     printf("\033[1;32m");
-    printf("\t%s o id %d skonczyl manipulowac z zasobem o id %d\n", processType, processId, resourceId);
+    *lamportClock = incrementLamportClock(*lamportClock);
+    printf("\tZegar Lamporta - %d - %s o id %d skonczyl %s %s o id %d\n", *lamportClock, processType, processId, action, chosenResourceTypeString, resourceId);
     printf("\033[0m");
 }
 
@@ -164,7 +167,11 @@ int main(int argc, char **argv) {
     const int NUMBER_OF_RESOURCES = NUMBER_OF_TOILETS + NUMBER_OF_PLANTS;
     const int PROCESS_TYPE = rank < NUMBER_OF_GOOD_GUYS ? GOOD_GUY : BAD_GUY;
     const int OPPOSITE_TYPE = rank < NUMBER_OF_GOOD_GUYS ? BAD_GUY : GOOD_GUY;
-    const char* PROCESS_TYPE_STRING = PROCESS_TYPE == GOOD_GUY ? "Dobrodziej" : "Zlodziej";
+    char* PROCESS_TYPE_STRING = PROCESS_TYPE == GOOD_GUY ? "Dobrodziej" : "Zlodziej";
+    char* ACTION_STRING = PROCESS_TYPE == GOOD_GUY ? "naprawia" : "psuje";
+    const char TOILET[] = "toalete";
+    const char PLANT[] = "doniczke";
+    char* chosenResourceTypeString = malloc(10);
     
     if (!areArgumentsCorrect(NUMBER_OF_GOOD_GUYS, NUMBER_OF_BAD_GUYS, // sprawdzenie poprawności argumentów
                             NUMBER_OF_PLANTS, NUMBER_OF_TOILETS, size)) {
@@ -212,7 +219,9 @@ int main(int argc, char **argv) {
         else {
             chosenResource = chooseResource(requestQueues, NUMBER_OF_RESOURCES, PROCESS_TYPE, OPPOSITE_TYPE);
         }
-        if (rank == 11) printHeap(&requestQueues[GOOD_GUY][chosenResource]);
+        if (chosenResource < NUMBER_OF_TOILETS) strcpy(chosenResourceTypeString, TOILET);
+        else strcpy(chosenResourceTypeString, PLANT);
+
         //printf("%s %d ubiega sie o zasob %d\n", PROCESS_TYPE_STRING, rank, chosenResource);
         lamportClock = incrementLamportClock(lamportClock);
         awaitingCriticalSection = 1;
@@ -220,7 +229,7 @@ int main(int argc, char **argv) {
         broadcastMessage(rank, chosenResource, REQ, size, lamportClock);
         while(awaitingCriticalSection) {
             MPI_Recv(receivedMessageBuffer, 2, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-            if (status.MPI_TAG == 3) printf("%s %d otrzymal wiadomosc release dotyczaca zasobu %d od procesu %d\n", PROCESS_TYPE_STRING, rank, receivedMessageBuffer[1], status.MPI_SOURCE);
+            if (status.MPI_TAG == 3) printf("%s %d otrzymal wiadomosc release dotyczaca zasobu %d od procesu %d z zegarem %d\n", PROCESS_TYPE_STRING, rank, receivedMessageBuffer[1], status.MPI_SOURCE, receivedMessageBuffer[0]);
             //printf("Proces %d otrzymal wiadomosc typu %d od procesu %d\n", rank, status.MPI_TAG, status.MPI_SOURCE);
             int incomingClockValue = receivedMessageBuffer[0];
             int requestedResourceId;
@@ -241,9 +250,8 @@ int main(int argc, char **argv) {
                 isOnTopOfQueue = checkIfRequestIsOnTopOfQueue(requestQueues, chosenResource, rank, PROCESS_TYPE);
                 //printf("ID procesu: %d Czy na szczycie :%d Czy zaakceptowany: %d Stan procesu: %d\n", rank, isOnTopOfQueue, isAcceptedByEveryone, resourcesStates[chosenResource]);
                 if (isAcceptedByEveryone && isOnTopOfQueue && resourcesStates[chosenResource] == PROCESS_TYPE) {
-                    enterCriticalSection(rank, PROCESS_TYPE_STRING, chosenResource);
+                    enterCriticalSection(rank, PROCESS_TYPE_STRING, chosenResource, &lamportClock, chosenResourceTypeString, ACTION_STRING);
                     awaitingCriticalSection = 0;
-                    lamportClock = incrementLamportClock(lamportClock);
                     broadcastMessage(rank, chosenResource, RELEASE, size, lamportClock);
                     removeRoot(&requestQueues[PROCESS_TYPE][chosenResource]);
                     resourcesStates[chosenResource] = PROCESS_TYPE == GOOD_GUY ? REPAIRED : BROKEN;
@@ -258,9 +266,8 @@ int main(int argc, char **argv) {
                     resourcesStates[releasedResourceId] = senderType == GOOD_GUY ? REPAIRED : BROKEN; 
                     int nextProcessId = removePendingReleases(releasedResourceId, resourcesStates, releaseQueues, requestQueues);
                     if (chosenResource == releasedResourceId && nextProcessId == rank && isAcceptedByEveryone) {
-                        enterCriticalSection(rank, PROCESS_TYPE_STRING, chosenResource);
+                        enterCriticalSection(rank, PROCESS_TYPE_STRING, chosenResource, &lamportClock, chosenResourceTypeString, ACTION_STRING);
                         awaitingCriticalSection = 0;
-                        lamportClock = incrementLamportClock(lamportClock);
                         broadcastMessage(rank, chosenResource, RELEASE, size, lamportClock);
                         removeRoot(&requestQueues[PROCESS_TYPE][chosenResource]);
                         resourcesStates[chosenResource] = PROCESS_TYPE == GOOD_GUY ? REPAIRED : BROKEN;
